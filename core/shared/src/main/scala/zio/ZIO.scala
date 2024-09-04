@@ -739,11 +739,8 @@ sealed trait ZIO[-R, +E, +A]
   final def forEachZIO[R1 <: R, E2, B](f: A => ZIO[R1, E2, B])(implicit trace: Trace): ZIO[R1, E2, Option[B]] =
     self.foldCauseZIO(_ => ZIO.none, a => f(a).map(Some(_)))
 
-  final def forever(implicit trace: Trace): ZIO[R, E, Nothing] = {
-    lazy val loop: ZIO[R, E, Nothing] = self *> ZIO.yieldNow *> loop
-
-    loop
-  }
+  final def forever(implicit trace: Trace): ZIO[R, E, Nothing] =
+    ZIO.whileLoop(true)(self)(_ => ()).asInstanceOf[ZIO[R, E, Nothing]]
 
   /**
    * Returns an effect that forks this effect into its own separate fiber,
@@ -1538,10 +1535,18 @@ sealed trait ZIO[-R, +E, +A]
    */
   final def repeatN(n: => Int)(implicit trace: Trace): ZIO[R, E, A] =
     ZIO.suspendSucceed {
-      def loop(n: Int): ZIO[R, E, A] =
-        self.flatMap(a => if (n <= 0) Exit.succeed(a) else ZIO.yieldNow *> loop(n - 1))
+      var count                = n
+      var result: ZIO[R, E, A] = self
 
-      loop(n)
+      ZIO
+        .whileLoop(count >= 0)(
+          result.flatMap { a =>
+            count -= 1
+            if (count <= 0) ZIO.succeed(a) else ZIO.yieldNow *> self
+
+          }
+        )(() => _)
+        .asInstanceOf[ZIO[R, E, A]]
     }
 
   /**
